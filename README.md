@@ -24,11 +24,13 @@ This project is licensed under the GNU Affero General Public License v3.0 (AGPL-
 
 ---------------
 
-## Notes and Changelog
+## Notes and Changelog for this fork
 
 - Created with heavy AI assistance. It works for me, hopefully it will work for you too.
 - My main focus was better UI/UX and improved OpenRouter integration.
 - Note on Accuracy: This extension estimates costs using SillyTavern's internal tokenizers (I left original logic alone). For models that fall back to the default GPT-3 counter, accuracy will vary. Always refer to your API provider's dashboard for definitive billing.
+
+![Image](https://github.com/user-attachments/assets/9562e3b6-185d-49df-926c-33680c9667f4)
 
 ### v1.2.0 (2026-03-15)
 - **Top Bar Integration**: Seamless icon placement next to native API settings.
