@@ -127,12 +127,61 @@ function getHourKey(date = new Date()) {
 /**
  * Get the current week key (YYYY-WNN)
  */
+/**
+ * Get the current week key (YYYY-WNN) dynamically based on the user's browser locale.
+ * Automatically switches between Monday-first (ISO 8601) and Sunday-first layouts.
+ * @param {Date} date - The date to evaluate
+ * @returns {string} The formatted week key (e.g., "2025-W04")
+ */
 function getWeekKey(date = new Date()) {
-    const year = date.getFullYear();
-    const startOfYear = new Date(year, 0, 1);
-    const days = Math.floor((date.getTime() - startOfYear.getTime()) / (24 * 60 * 60 * 1000));
-    const weekNumber = Math.ceil((days + startOfYear.getDay() + 1) / 7);
-    return `${year}-W${String(weekNumber).padStart(2, '0')}`;
+    const target = new Date(date.valueOf());
+    let isMondayStart = true; // Default to ISO standard
+    
+    try {
+        // Detect if the browser locale sets Sunday as the first day of the week
+        const locale = new Intl.Locale(navigator.language);
+        if (locale.weekInfo && locale.weekInfo.firstDay === 7) {
+            isMondayStart = false;
+        } else if (!locale.weekInfo) {
+            // Fallback for older browsers missing the weekInfo API
+            const sundayLocales = ['en-US', 'en-CA', 'ja-JP', 'zh-CN', 'ko-KR', 'es-MX', 'pt-BR'];
+            if (sundayLocales.some(loc => navigator.language.startsWith(loc))) {
+                isMondayStart = false;
+            }
+        }
+    } catch (e) {
+        // Silently ignore errors and proceed with default Monday start
+    }
+
+    if (isMondayStart) {
+        // Monday start logic (ISO 8601 standard for Europe and most of the world)
+        // Week 1 is defined as the week containing the first Thursday of the year
+        const dayNr = (target.getDay() + 6) % 7;
+        target.setDate(target.getDate() - dayNr + 3); 
+        const firstThursday = target.valueOf();
+        
+        target.setMonth(0, 1);
+        if (target.getDay() !== 4) {
+            target.setMonth(0, 1 + ((4 - target.getDay()) + 7) % 7);
+        }
+        
+        const weekNumber = 1 + Math.ceil((firstThursday - target) / 604800000);
+        return `${target.getFullYear()}-W${String(weekNumber).padStart(2, '0')}`;
+    } else {
+        // Sunday start logic (US standard)
+        // Week 1 is defined as the week containing the first Wednesday of the year
+        const dayNr = target.getDay();
+        target.setDate(target.getDate() - dayNr + 3); 
+        const firstWednesday = target.valueOf();
+        
+        target.setMonth(0, 1);
+        if (target.getDay() !== 3) {
+            target.setMonth(0, 1 + ((3 - target.getDay()) + 7) % 7);
+        }
+        
+        const weekNumber = 1 + Math.ceil((firstWednesday - target) / 604800000);
+        return `${target.getFullYear()}-W${String(weekNumber).padStart(2, '0')}`;
+    }
 }
 
 /**
@@ -219,8 +268,20 @@ function recordUsage(inputTokens, outputTokens, chatId = null, modelId = null) {
 
     // By hour
     const hourKey = getHourKey(now);
-    if (!usage.byHour[hourKey]) usage.byHour[hourKey] = { input: 0, output: 0, total: 0, messageCount: 0 };
+    if (!usage.byHour[hourKey]) usage.byHour[hourKey] = { input: 0, output: 0, total: 0, messageCount: 0, models: {} };
     addTokens(usage.byHour[hourKey]);
+
+    // Track model within hour for stacked chart
+    if (modelId) {
+        if (!usage.byHour[hourKey].models) usage.byHour[hourKey].models = {};
+        if (!usage.byHour[hourKey].models[modelId]) {
+            usage.byHour[hourKey].models[modelId] = { input: 0, output: 0, total: 0 };
+        }
+        const hourModelData = usage.byHour[hourKey].models[modelId];
+        hourModelData.input += inputTokens;
+        hourModelData.output += outputTokens;
+        hourModelData.total += totalTokens;
+    }
 
     // By week
     const weekKey = getWeekKey(now);
@@ -285,6 +346,10 @@ function resetAllUsage() {
  * Get comprehensive usage statistics
  * @returns {Object} Usage statistics object
  */
+/**
+ * Get comprehensive usage statistics dynamically aggregated from daily data to ensure perfect consistency.
+ * @returns {Object} Usage statistics object
+ */
 function getUsageStats() {
     const settings = getSettings();
     const usage = settings.usage;
@@ -298,13 +363,40 @@ function getUsageStats() {
         // Ignore if not available yet
     }
 
+    const currentWeekKey = getWeekKey(now);
+    const currentMonthKey = getMonthKey(now);
+    
+    // Initialize empty buckets for dynamic calculation
+    const thisWeek = { input: 0, output: 0, total: 0, messageCount: 0 };
+    const thisMonth = { input: 0, output: 0, total: 0, messageCount: 0 };
+
+    // Dynamically aggregate week and month from accurate daily buckets.
+    // This prevents desync if the week/month calculation logic changes mid-week.
+    for (const [dayKey, data] of Object.entries(usage.byDay)) {
+        const [year, month, day] = dayKey.split('-').map(Number);
+        const date = new Date(year, month - 1, day);
+        
+        if (getWeekKey(date) === currentWeekKey) {
+            thisWeek.input += data.input || 0;
+            thisWeek.output += data.output || 0;
+            thisWeek.total += data.total || 0;
+            thisWeek.messageCount += data.messageCount || 0;
+        }
+        if (getMonthKey(date) === currentMonthKey) {
+            thisMonth.input += data.input || 0;
+            thisMonth.output += data.output || 0;
+            thisMonth.total += data.total || 0;
+            thisMonth.messageCount += data.messageCount || 0;
+        }
+    }
+
     return {
         session: { ...usage.session },
         allTime: { ...usage.allTime },
         today: usage.byDay[getDayKey(now)] || { input: 0, output: 0, total: 0, messageCount: 0, models: {} },
         thisHour: usage.byHour[getHourKey(now)] || { input: 0, output: 0, total: 0, messageCount: 0 },
-        thisWeek: usage.byWeek[getWeekKey(now)] || { input: 0, output: 0, total: 0, messageCount: 0 },
-        thisMonth: usage.byMonth[getMonthKey(now)] || { input: 0, output: 0, total: 0, messageCount: 0 },
+        thisWeek: thisWeek,
+        thisMonth: thisMonth,
         currentChat: null, // Will be populated if context available
         // Metadata
         tokenizer: tokenizerInfo.tokenizerName,
@@ -585,7 +677,7 @@ async function handleMessageReceived(messageIndex, type) {
         pendingModelId = null;
 
         // Get current chat ID if available
-        const chatId = context.chatMetadata?.chat_id || null;
+        const chatId = context?.chatId || null;
 
         recordUsage(inputTokens, outputTokens, chatId, modelId);
 
@@ -632,7 +724,7 @@ async function handleGenerationStopped() {
 
         // Get current chat ID if available
         const context = getContext();
-        const chatId = context.chatMetadata?.chat_id || null;
+        const chatId = context?.chatId || null;
 
         // Record the usage - input tokens were sent even if generation was stopped
         recordUsage(inputTokens, outputTokens, chatId, modelId);
@@ -684,7 +776,7 @@ async function handleImpersonateReady(text) {
 
         // Get current chat ID if available
         const context = getContext();
-        const chatId = context.chatMetadata?.chat_id || null;
+        const chatId = context?.chatId || null;
 
         recordUsage(inputTokens, outputTokens, chatId, modelId);
 
@@ -809,6 +901,59 @@ function getModelColor(modelId) {
 }
 
 /**
+ * Fetches and caches pricing data from the OpenRouter public API.
+ * Converts prices from per-token to per-1M-tokens standard.
+ */
+let openRouterPriceCache = null;
+let isFetchingOpenRouterPrices = false;
+
+async function fetchOpenRouterPrices() {
+    if (openRouterPriceCache || isFetchingOpenRouterPrices) return;
+    
+    isFetchingOpenRouterPrices = true;
+    
+    // Create an AbortController to handle the timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 seconds timeout
+
+    try {
+        const response = await fetch('https://openrouter.ai/api/v1/models', {
+            signal: controller.signal
+        });
+
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+        const data = await response.json();
+        clearTimeout(timeoutId);
+
+        openRouterPriceCache = {};
+        if (data?.data) {
+            for (const model of data.data) {
+                if (model.id && model.pricing) {
+                    openRouterPriceCache[model.id] = {
+                        in: parseFloat(model.pricing.prompt) * 1000000,
+                        out: parseFloat(model.pricing.completion) * 1000000
+                    };
+                }
+            }
+        }
+        
+        console.log('[Token Usage Tracker] OpenRouter prices updated successfully.');
+        updateUIStats();
+    } catch (e) {
+        if (e.name === 'AbortError') {
+            console.warn('[Token Usage Tracker] OpenRouter fetch timed out after 5s.');
+        } else {
+            console.warn('[Token Usage Tracker] Failed to fetch OpenRouter prices:', e.message);
+        }
+        // Fallback: the code will continue using settings.modelPrices or 0.
+    } finally {
+        isFetchingOpenRouterPrices = false;
+        clearTimeout(timeoutId);
+    }
+}
+
+/**
  * Convert HSL to hex color
  */
 function hslToHex(h, s, l) {
@@ -860,13 +1005,37 @@ function setModelColor(modelId, color) {
 }
 
 /**
- * Get price settings for a model
- * @param {string} modelId
- * @returns {{in: number, out: number}} Price per 1M tokens
+ * Retrieves the price for a specific model.
+ * If the price is missing in settings, it attempts to pull it from the OpenRouter cache.
+ * @param {string} modelId - The unique identifier of the model.
+ * @returns {Object} {in: number, out: number} prices per 1M tokens.
  */
 function getModelPrice(modelId) {
     const settings = getSettings();
-    return settings.modelPrices[modelId] || { in: 0, out: 0 };
+    
+    // 1. Check if we already have a manual or previously cached price in settings
+    if (settings.modelPrices[modelId] && (settings.modelPrices[modelId].in > 0 || settings.modelPrices[modelId].out > 0)) {
+        return settings.modelPrices[modelId];
+    }
+
+    // 2. If not in settings, try to get it from the live OpenRouter cache
+    if (openRouterPriceCache && openRouterPriceCache[modelId]) {
+        const cachedPrice = openRouterPriceCache[modelId];
+        
+        // Silently update settings so the UI can reflect this immediately
+        settings.modelPrices[modelId] = { 
+            in: cachedPrice.in, 
+            out: cachedPrice.out 
+        };
+        
+        // Save to persistent storage
+        saveSettings();
+        
+        return settings.modelPrices[modelId];
+    }
+
+    // 3. Fallback: return zero if no price is found anywhere
+    return { in: 0, out: 0 };
 }
 
 /**
@@ -938,30 +1107,62 @@ function createSVGElement(type, attrs = {}) {
 }
 
 /**
- * Get chart data from real usage stats
+ * Get chart data from real usage stats, supporting both hourly and daily ranges
+ * @param {number} range - The time range (24 for hours, or days like 7, 30, 90)
+ * @returns {Array} Array of chart data objects
  */
-function getChartData(days) {
+function getChartData(range) {
     const stats = getUsageStats();
-    const byDay = stats.byDay || {};
     const data = [];
     const today = new Date();
 
-    for (let i = days - 1; i >= 0; i--) {
-        const date = new Date(today);
-        date.setDate(date.getDate() - i);
-        const dayKey = getDayKey(date);
-        const dayData = byDay[dayKey] || { total: 0, input: 0, output: 0, models: {} };
+    if (range === 24) {
+        // Process hourly data for the last 24 hours
+        const byHour = stats.byHour || {};
+        for (let i = 23; i >= 0; i--) {
+            const date = new Date(today);
+            date.setHours(date.getHours() - i);
+            const hourKey = getHourKey(date);
+            const hourData = byHour[hourKey] || { total: 0, input: 0, output: 0, models: {} };
+            
+            // Handle legacy data from before models were tracked per hour
+            // If models object is missing but we have tokens, group them under "Legacy/Unknown"
+            let chartModels = hourData.models || {};
+            if (Object.keys(chartModels).length === 0 && hourData.total > 0) {
+                chartModels = { "Legacy/Unknown": { total: hourData.total, input: hourData.input, output: hourData.output } };
+            }
 
-        data.push({
-            date: date,
-            dayKey: dayKey,
-            usage: dayData.total || 0,
-            input: dayData.input || 0,
-            output: dayData.output || 0,
-            models: dayData.models || {},
-            displayDate: new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(date),
-            fullDate: new Intl.DateTimeFormat('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }).format(date)
-        });
+            data.push({
+                date: date,
+                dayKey: hourKey,
+                usage: hourData.total || 0,
+                input: hourData.input || 0,
+                output: hourData.output || 0,
+                models: chartModels,
+                displayDate: new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(date),
+                fullDate: new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(date)
+            });
+        }
+    } else {
+        // Process daily data (original logic for 7, 30, 90 days)
+        const byDay = stats.byDay || {};
+        for (let i = range - 1; i >= 0; i--) {
+            const date = new Date(today);
+            date.setDate(date.getDate() - i);
+            const dayKey = getDayKey(date);
+            const dayData = byDay[dayKey] || { total: 0, input: 0, output: 0, models: {} };
+
+            data.push({
+                date: date,
+                dayKey: dayKey,
+                usage: dayData.total || 0,
+                input: dayData.input || 0,
+                output: dayData.output || 0,
+                models: dayData.models || {},
+                displayDate: new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(date),
+                fullDate: new Intl.DateTimeFormat('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }).format(date)
+            });
+        }
     }
     return data;
 }
@@ -1054,13 +1255,69 @@ function renderChart() {
     let barWidth = totalBarWidth * 0.8;
     if (barWidth > 40) barWidth = 40;
     const actualGap = totalBarWidth - barWidth;
-    const labelInterval = currentChartRange === 90 ? 7 : currentChartRange === 30 ? 3 : 1;
+    const labelInterval = currentChartRange === 90 ? 7 : currentChartRange === 30 ? 3 : currentChartRange === 24 ? 4 : 1;
 
     chartData.forEach((d, i) => {
         const slotX = margin.left + (i * totalBarWidth);
         const barX = slotX + (actualGap / 2);
         const barH = (d.usage / niceMax) * chartHeight;
         const barY = margin.top + (chartHeight - barH);
+
+        // --- Boundary Line Logic (Midnight, Week, Month) ---
+        let drawBoundary = false;
+        let boundaryText = '';
+
+        if (currentChartRange === 24) {
+            // 24H chart: Draw line at midnight (00:xx)
+            if (d.date.getHours() === 0) {
+                drawBoundary = true;
+                boundaryText = '00:00';
+            }
+        } else if (currentChartRange === 7) {
+            // 7D chart: Draw line when the week key changes compared to the previous day
+            if (i > 0) {
+                const prevDate = chartData[i - 1].date;
+                if (getWeekKey(d.date) !== getWeekKey(prevDate)) {
+                    drawBoundary = true;
+                    // Extract just the week number part (e.g., from "2026-W12" to "W12")
+                    boundaryText = getWeekKey(d.date).split('-')[1]; 
+                }
+            }
+        } else if (currentChartRange === 30 || currentChartRange === 90) {
+            // 30D / 90D chart: Draw line at the 1st day of the month
+            if (d.date.getDate() === 1) {
+                drawBoundary = true;
+                // Format the month name (e.g., "Jan", "Feb")
+                boundaryText = new Intl.DateTimeFormat('en-US', { month: 'short' }).format(d.date);
+            }
+        }
+
+        // Render the boundary line and label if conditions are met
+        if (drawBoundary) {
+            const boundaryLine = createSVGElement('line', {
+                x1: slotX,
+                y1: margin.top,
+                x2: slotX,
+                y2: height - margin.bottom,
+                stroke: CHART_COLORS.grid,
+                'stroke-width': '1.5',
+                'stroke-dasharray': '4 4',
+                opacity: '0.8'
+            });
+            gridGroup.appendChild(boundaryLine);
+
+            const boundaryLabel = createSVGElement('text', {
+                x: slotX + 4,
+                y: margin.top + 8,
+                fill: CHART_COLORS.text,
+                opacity: '0.5',
+                'font-size': '8',
+                'font-family': 'ui-sans-serif, system-ui, sans-serif'
+            });
+            boundaryLabel.textContent = boundaryText;
+            textGroup.appendChild(boundaryLabel);
+        }
+        // --- End Boundary Line Logic ---
 
         // Hover area
         const cursor = createSVGElement('rect', {
@@ -1250,6 +1507,58 @@ function hideTooltip() {
     tooltip.style.display = 'none';
 }
 
+/**
+ * Generates and displays a text-based summary in the global SillyTavern tooltip.
+ * Uses the exact tokenizer ID seen in the console logs for accuracy.
+ */
+function showTopBarTextTooltip(e) {
+    if (!tooltip) return;
+
+    const stats = getUsageStats();
+    const settings = getSettings();
+    const todayData = settings.usage.byDay[getDayKey(new Date())] || { models: {} };
+
+    // Header
+    let content = `<div style="margin-bottom: 8px; font-weight: bold; border-bottom: 1px solid rgba(255,255,255,0.2); padding-bottom: 4px; color: #fbbf24;">Today's Token Usage</div>`;
+
+    // 1. Model breakdown
+    if (Object.keys(todayData.models).length > 0) {
+        content += `<div style="margin-bottom: 8px;">`;
+        for (const [modelId, data] of Object.entries(todayData.models)) {
+            const cost = calculateCost(data.input || 0, data.output || 0, modelId);
+            if ((data.total || 0) > 0) {
+                content += `
+                    <div style="display: flex; justify-content: space-between; gap: 15px; font-size: 10px; margin-bottom: 2px;">
+                        <span style="color: ${getModelColor(modelId)}; opacity: 0.9;">${modelId.split('/').pop()}:</span>
+                        <span style="font-weight: bold;">$${cost.toFixed(3)}</span>
+                    </div>`;
+            }
+        }
+        content += `</div>`;
+    }
+
+    // 2. Totals and Tokenizer Info
+    const sessionCost = calculateCost(stats.session.input, stats.session.output, null);
+    content += `
+        <div style="display: flex; flex-direction: column; gap: 2px; font-size: 10px; opacity: 0.8; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 4px;">
+            <div style="display: flex; justify-content: space-between;">
+                <span>Session Cost:</span>
+                <span style="font-weight: bold;">$${sessionCost.toFixed(3)}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between;">
+                <span>Today's Messages:</span>
+                <span>${stats.today.messageCount || 0}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-top: 4px; border-top: 1px dashed rgba(255,255,255,0.1); padding-top: 2px; font-style: italic; opacity: 0.7;">
+                <span>Active Tokenizer:</span>
+                <span style="text-transform: capitalize;">${getFriendlyTokenizerName(main_api).tokenizerName}</span>
+            </div>
+        </div>`;
+
+    tooltip.innerHTML = content;
+    tooltip.style.display = 'block';
+    moveTooltip(e);
+}
 
 function updateChartRange(range) {
     currentChartRange = range;
@@ -1282,6 +1591,18 @@ function updateUIStats() {
     $('#token-usage-week-total').text(formatTokens(stats.thisWeek.total));
     $('#token-usage-month-total').text(formatTokens(stats.thisMonth.total));
     $('#token-usage-alltime-total').text(formatTokens(stats.allTime.total));
+
+    // Current Chat Stats
+    const context = getContext();
+    const chatId = context?.chatId || null;
+    if (chatId) {
+        const chatData = getChatUsage(chatId);
+        $('#token-usage-chat-total').text(formatTokens(chatData.total || 0));
+        $('#token-usage-chat-msgs').text(`${chatData.messageCount || 0} msgs`);
+    } else {
+        $('#token-usage-chat-total').text('0');
+        $('#token-usage-chat-msgs').text('0 msgs');
+    }
 
     // Cost calculations
     const allTimeCost = calculateAllTimeCost();
@@ -1339,6 +1660,13 @@ function updateUIStats() {
     $('#token-usage-week-cost').text(`$${weekCost.toFixed(2)}`);
     $('#token-usage-month-cost').text(`$${monthCost.toFixed(2)}`);
     $('#token-usage-today-cost').text(`$${todayCost.toFixed(2)}`);
+	// Update the newly added Today card in the grid
+    $('#token-usage-grid-today-total').text(formatTokens(stats.today.total));
+    $('#token-usage-grid-today-cost').text(`$${todayCost.toFixed(2)}`);
+	// Update the new top bar badge (3 decimal places as requested)
+    if ($('#token-usage-topbar-cost').length) {
+        $('#token-usage-topbar-cost').text(`$${todayCost.toFixed(2)}`);
+    }
 
     $('#token-usage-tokenizer').text('Tokenizer: ' + (stats.tokenizer || 'Unknown'));
 
@@ -1418,6 +1746,53 @@ function renderModelColorsGrid() {
 }
 
 /**
+ * Injects the cost display into the top settings bar and sets up tooltip listeners.
+ */
+function createTopBarUI() {
+    const settings = getSettings();
+    if (!settings.showInTopBar) return;
+    if ($('#token-usage-topbar').length > 0) return;
+
+    const topBarElement = $(`
+        <div id="token-usage-topbar" class="drawer" style="display: flex; align-items: center; justify-content: center; cursor: pointer; height: 100%; padding: 0 8px; transition: opacity 0.2s;">
+            <div class="drawer-toggle" style="display: flex; align-items: center; gap: 6px;">
+                <i class="fa-solid fa-coins" style="color: #fbbf24; font-size: 14px;"></i>
+                <span id="token-usage-topbar-cost" style="font-size: 13px; font-weight: bold; color: var(--SmartThemeBodyColor);">$0.00</span>
+            </div>
+        </div>
+    `);
+
+    // Attach listeners for the text tooltip
+    topBarElement.on('mouseenter', (e) => {
+        topBarElement.css('opacity', '0.8');
+        showTopBarTextTooltip(e); // Calls the text summary function
+    });
+    topBarElement.on('mouseleave', () => {
+        topBarElement.css('opacity', '1');
+        hideTooltip();
+    });
+    topBarElement.on('mousemove', (e) => {
+        moveTooltip(e);
+    });
+
+    // Navigation logic on click
+    topBarElement.on('click', () => {
+        if (!$('#extensions_settings').is(':visible') && !$('#extensions_settings2').is(':visible')) {
+            $('#extensions_button').trigger('click');
+        }
+        const extContainer = $('#token_usage_tracker_container');
+        if (extContainer.length) {
+            extContainer[0].scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    });
+
+    const holder = $('#top-settings-holder');
+    if (holder.length) {
+        holder.append(topBarElement);
+    }
+}
+
+/**
  * Create the settings UI in the extensions panel
  */
 function createSettingsUI() {
@@ -1432,7 +1807,6 @@ function createSettingsUI() {
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content">
-                    <!-- Chart Header: Today stats + Range selector -->
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                         <div>
                             <div style="display: flex; align-items: baseline; gap: 6px;">
@@ -1446,17 +1820,39 @@ function createSettingsUI() {
                             </div>
                         </div>
                         <div style="display: inline-flex; background: var(--SmartThemeInputColor); border: 1px solid var(--SmartThemeBorderColor); border-radius: 6px; padding: 2px;">
+                            <button class="token-usage-range-btn menu_button" data-value="24" style="padding: 4px 10px; font-size: 11px; border-radius: 4px;">24H</button>
                             <button class="token-usage-range-btn menu_button" data-value="7" style="padding: 4px 10px; font-size: 11px; border-radius: 4px;">7D</button>
                             <button class="token-usage-range-btn menu_button active" data-value="30" style="padding: 4px 10px; font-size: 11px; border-radius: 4px;">30D</button>
                             <button class="token-usage-range-btn menu_button" data-value="90" style="padding: 4px 10px; font-size: 11px; border-radius: 4px;">90D</button>
                         </div>
                     </div>
 
-                    <!-- Chart -->
                     <div id="token-usage-chart" style="width: 100%; height: 320px; background: var(--SmartThemeInputColor); border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; overflow: hidden; margin-bottom: 12px;"></div>
 
-                    <!-- Stats Grid (Week, Month, All Time) -->
-                    <div class="token-usage-stats-grid" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 10px;">
+                    <div class="token-usage-stats-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 10px;">
+                        
+                        <div class="token-usage-stat-card" style="background: var(--SmartThemeInputColor); border-radius: 6px; border: 1px solid var(--SmartThemeBorderColor); overflow: hidden; display: flex;">
+                            <div style="flex: 1; padding: 4px 8px;">
+                                <div style="font-size: 9px; color: var(--SmartThemeBodyColor); opacity: 0.5;">Current Chat</div>
+                                <div style="font-size: 14px; font-weight: 600; color: var(--SmartThemeBodyColor);" id="token-usage-chat-total">0</div>
+                            </div>
+                            <div style="width: 1px; background: var(--SmartThemeBorderColor);"></div>
+                            <div style="flex: 1; padding: 4px 8px; display: flex; align-items: center; justify-content: center;">
+                                <span style="font-size: 12px; font-weight: 600; color: var(--SmartThemeBodyColor);" id="token-usage-chat-msgs">0 msgs</span>
+                            </div>
+                        </div>
+
+                        <div class="token-usage-stat-card" style="background: var(--SmartThemeInputColor); border-radius: 6px; border: 1px solid var(--SmartThemeBorderColor); overflow: hidden; display: flex;">
+                            <div style="flex: 1; padding: 4px 8px;">
+                                <div style="font-size: 9px; color: var(--SmartThemeBodyColor); opacity: 0.5;">Today</div>
+                                <div style="font-size: 14px; font-weight: 600; color: var(--SmartThemeBodyColor);" id="token-usage-grid-today-total">${formatTokens(stats.today.total)}</div>
+                            </div>
+                            <div style="width: 1px; background: var(--SmartThemeBorderColor);"></div>
+                            <div style="flex: 1; padding: 4px 8px; display: flex; align-items: center; justify-content: center;">
+                                <span style="font-size: 14px; font-weight: 600; color: var(--SmartThemeBodyColor);" id="token-usage-grid-today-cost">$0.00</span>
+                            </div>
+                        </div>
+
                         <div class="token-usage-stat-card" style="background: var(--SmartThemeInputColor); border-radius: 6px; border: 1px solid var(--SmartThemeBorderColor); overflow: hidden; display: flex;">
                             <div style="flex: 1; padding: 4px 8px;">
                                 <div style="font-size: 9px; color: var(--SmartThemeBodyColor); opacity: 0.5;">This Week</div>
@@ -1467,6 +1863,7 @@ function createSettingsUI() {
                                 <span style="font-size: 14px; font-weight: 600; color: var(--SmartThemeBodyColor);" id="token-usage-week-cost">$0.00</span>
                             </div>
                         </div>
+
                         <div class="token-usage-stat-card" style="background: var(--SmartThemeInputColor); border-radius: 6px; border: 1px solid var(--SmartThemeBorderColor); overflow: hidden; display: flex;">
                             <div style="flex: 1; padding: 4px 8px;">
                                 <div style="font-size: 9px; color: var(--SmartThemeBodyColor); opacity: 0.5;">This Month</div>
@@ -1477,6 +1874,7 @@ function createSettingsUI() {
                                 <span style="font-size: 14px; font-weight: 600; color: var(--SmartThemeBodyColor);" id="token-usage-month-cost">$0.00</span>
                             </div>
                         </div>
+
                         <div class="token-usage-stat-card" style="background: var(--SmartThemeInputColor); border-radius: 6px; border: 1px solid var(--SmartThemeBorderColor); overflow: hidden; display: flex;">
                             <div style="flex: 1; padding: 4px 8px;">
                                 <div style="font-size: 9px; color: var(--SmartThemeBodyColor); opacity: 0.5;">All Time</div>
@@ -1489,7 +1887,6 @@ function createSettingsUI() {
                         </div>
                     </div>
 
-                    <!-- Config (Model Colors & Prices) -->
                     <div class="inline-drawer" style="margin-top: 10px;">
                         <div class="inline-drawer-toggle inline-drawer-header" style="padding: 4px 0 4px 8px;">
                             <span style="font-size: 11px;">Config</span>
@@ -1500,7 +1897,6 @@ function createSettingsUI() {
                         </div>
                     </div>
 
-                    <!-- Controls -->
                     <div style="display: flex; align-items: center; gap: 8px; padding-left: 8px;">
                         <div style="font-size: 9px; color: var(--SmartThemeBodyColor); opacity: 0.4;" id="token-usage-tokenizer">Tokenizer: ${stats.tokenizer || 'Unknown'}</div>
                         <div style="flex: 1;"></div>
@@ -1512,7 +1908,7 @@ function createSettingsUI() {
             </div>
         </div>
     `;
-
+    
     const targetContainer = $('#extensions_settings2');
     if (targetContainer.length > 0) {
         targetContainer.append(html);
@@ -1755,8 +2151,15 @@ jQuery(async () => {
     console.log('[Token Usage Tracker] Initializing...');
 
     loadSettings();
+	
+	// Asynchronously fetch OpenRouter prices in the background
+    fetchOpenRouterPrices();
+	
     registerSlashCommands();
     createSettingsUI();
+
+    // Create the top bar badge
+    createTopBarUI();
 
     // Attempt to patch background generation functions
     patchBackgroundGenerations();
@@ -1784,3 +2187,4 @@ jQuery(async () => {
         eventSource.emit('tokenUsageUpdated', getUsageStats());
     }, 1000);
 });
+

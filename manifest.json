@@ -1,11 +1,13 @@
 {
     "display_name": "Token Usage Tracker",
-    "loading_order": 100,
+    "loading_order": 1000,
     "requires": [],
     "optional": [],
     "js": "index.js",
     "css": "style.css",
-    "author": "Vibecoder9000",
-    "version": "1.0.0",
+    "author": "jvsup (fork of Vibecoder9000)",
+    "version": "1.2.0",
+    "homePage": "https://github.com/JVsup/Extension-TokenUsage-forked",
     "auto_update": true
 }
+
