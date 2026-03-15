@@ -1803,7 +1803,7 @@ function createSettingsUI() {
         <div id="token_usage_tracker_container" class="extension_container">
             <div class="inline-drawer">
                 <div class="inline-drawer-toggle inline-drawer-header">
-                    <b>Token Usage Tracker</b>
+                    <b>Token Usage Tracker Forked</b>
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content">
