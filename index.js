@@ -24,7 +24,7 @@ const defaultSettings = {
     modelPrices: {},
     // Accumulated usage data
     usage: {
-        session: { input: 0, output: 0, total: 0, messageCount: 0, startTime: null },
+        session: { input: 0, output: 0, total: 0, messageCount: 0, startTime: null, models: {} },
         allTime: { input: 0, output: 0, total: 0, messageCount: 0 },
         // Time-based buckets: { "2025-01-15": { input: X, output: Y, total: Z, models: { "gpt-4o": 500, ... } }, ... }
         byDay: {},
@@ -51,6 +51,7 @@ function loadSettings() {
     if (!settings.modelColors) settings.modelColors = {};
     if (!settings.usage) settings.usage = structuredClone(defaultSettings.usage);
     if (!settings.usage.session) settings.usage.session = structuredClone(defaultSettings.usage.session);
+	if (!settings.usage.session.models) settings.usage.session.models = {};
     if (!settings.usage.allTime) settings.usage.allTime = structuredClone(defaultSettings.usage.allTime);
     if (!settings.usage.byDay) settings.usage.byDay = {};
     if (!settings.usage.byHour) settings.usage.byHour = {};
@@ -245,6 +246,17 @@ function recordUsage(inputTokens, outputTokens, chatId = null, modelId = null) {
 
     // Session
     addTokens(usage.session);
+	
+	// Track model within session
+    if (modelId) {
+        if (!usage.session.models) usage.session.models = {};
+        if (!usage.session.models[modelId]) {
+            usage.session.models[modelId] = { input: 0, output: 0, total: 0 };
+        }
+        usage.session.models[modelId].input += inputTokens;
+        usage.session.models[modelId].output += outputTokens;
+        usage.session.models[modelId].total += totalTokens;
+    }
 
     // All-time
     addTokens(usage.allTime);
@@ -324,6 +336,7 @@ function resetSession() {
         total: 0,
         messageCount: 0,
         startTime: new Date().toISOString(),
+        models: {}
     };
     saveSettings();
     eventSource.emit('tokenUsageUpdated', getUsageStats());
@@ -1538,7 +1551,15 @@ function showTopBarTextTooltip(e) {
     }
 
     // 2. Totals and Tokenizer Info
-    const sessionCost = calculateCost(stats.session.input, stats.session.output, null);
+    let sessionCost = 0;
+    if (stats.session.models) {
+        for (const [modelId, data] of Object.entries(stats.session.models)) {
+            sessionCost += calculateCost(data.input || 0, data.output || 0, modelId);
+        }
+    } else {
+        // Fallback calculation
+        sessionCost = calculateCost(stats.session.input, stats.session.output, null);
+    }
     content += `
         <div style="display: flex; flex-direction: column; gap: 2px; font-size: 10px; opacity: 0.8; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 4px;">
             <div style="display: flex; justify-content: space-between;">
