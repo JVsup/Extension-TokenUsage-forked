@@ -1550,16 +1550,15 @@ function showTopBarTextTooltip(e) {
         content += `</div>`;
     }
 
-    // 2. Totals and Tokenizer Info
+    // 2. Session Cost (Safe summation without dangerous fallbacks)
     let sessionCost = 0;
-    if (stats.session.models) {
-        for (const [modelId, data] of Object.entries(stats.session.models)) {
-            sessionCost += calculateCost(data.input || 0, data.output || 0, modelId);
+    if (stats.session && stats.session.models) {
+        for (const [mId, mData] of Object.entries(stats.session.models)) {
+            sessionCost += calculateCost(mData.input || 0, mData.output || 0, mId);
         }
-    } else {
-        // Fallback calculation
-        sessionCost = calculateCost(stats.session.input, stats.session.output, null);
     }
+
+    // Totals and Tokenizer Info
     content += `
         <div style="display: flex; flex-direction: column; gap: 2px; font-size: 10px; opacity: 0.8; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 4px;">
             <div style="display: flex; justify-content: space-between;">
@@ -2166,6 +2165,24 @@ async function handleBackgroundGeneration(originalFn, context, args, inputCounte
     }
 
     return result;
+}
+
+/**
+ * Wipes the session tracking bucket clean when the UI is loaded.
+ * Ensures "Session Cost" only tracks the current browser tab lifecycle.
+ */
+function resetSessionOnLoad() {
+    const settings = getSettings();
+    settings.usage.session = { 
+        input: 0, 
+        output: 0, 
+        total: 0, 
+        messageCount: 0, 
+        startTime: new Date().toISOString(),
+        models: {} 
+    };
+    saveSettings();
+    console.log('[Token Usage Tracker] Session data wiped clean for new browser session.');
 }
 
 jQuery(async () => {
