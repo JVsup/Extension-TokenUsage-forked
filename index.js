@@ -83,9 +83,14 @@ function loadSettings() {
     }
 
     // Initialize session start time
-    if (!settings.usage.session.startTime) {
-        settings.usage.session.startTime = new Date().toISOString();
-    }
+    settings.usage.session = {
+        input: 0,
+        output: 0,
+        total: 0,
+        messageCount: 0,
+        startTime: new Date().toISOString(),
+        models: {}
+    };
 
     return settings;
 }
@@ -2165,24 +2170,6 @@ async function handleBackgroundGeneration(originalFn, context, args, inputCounte
     }
 
     return result;
-}
-
-/**
- * Wipes the session tracking bucket clean when the UI is loaded.
- * Ensures "Session Cost" only tracks the current browser tab lifecycle.
- */
-function resetSessionOnLoad() {
-    const settings = getSettings();
-    settings.usage.session = { 
-        input: 0, 
-        output: 0, 
-        total: 0, 
-        messageCount: 0, 
-        startTime: new Date().toISOString(),
-        models: {} 
-    };
-    saveSettings();
-    console.log('[Token Usage Tracker] Session data wiped clean for new browser session.');
 }
 
 jQuery(async () => {
